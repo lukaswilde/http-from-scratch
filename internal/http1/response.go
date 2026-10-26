@@ -26,7 +26,6 @@ func (r *Response) Header() http.Header {
 func (r *Response) Write(data []byte) (n int, err error) {
 	log.Printf("Trying to write data %q", string(data))
 
-	r.header.Set("Content-Type", "text/plain")
 	r.header.Set("Content-Length", strconv.Itoa(len(data)))
 
 	writer := bufio.NewWriter(r.conn)
