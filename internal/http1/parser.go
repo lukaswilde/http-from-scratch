@@ -86,7 +86,7 @@ func processRequestLine(requestLine string, request *http.Request) error {
 		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("expected 3 fields in request line, got %d", len(fields))}
 	}
 
-	// TODO: should we validate these fields? Should Proto be validated for major/minor version
+	// TODO: should we validate these fields?
 	method := fields[0]
 	requestURI := fields[1]
 	requestProto := fields[2]

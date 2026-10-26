@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 const addr = ":8080"
@@ -49,6 +50,8 @@ func main() {
 				return
 			}
 			users = append(users, user)
+			w.Header().Set("Location", "/users/"+strconv.Itoa(user.UserID))
+			w.WriteHeader(http.StatusCreated)
 		}
 	})
 	if err := http1.ListenAndServe(addr, nil); err != nil {
