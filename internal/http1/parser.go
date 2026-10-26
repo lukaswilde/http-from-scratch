@@ -2,7 +2,9 @@ package http1
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/textproto"
@@ -42,9 +44,40 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 		}
 	}
 
+	if err = processBody(reader, &request); err != nil {
+		return nil, fmt.Errorf("failed to parse body: %w", err)
+	}
+
 	log.Println(request)
 	return &request, nil
 
+}
+
+func processBody(reader *bufio.Reader, request *http.Request) error {
+	if request.Header.Get("Content-Length") == "" {
+		request.ContentLength = 0
+		return nil
+	}
+
+	contentLength, err := strconv.Atoi(request.Header.Get("Content-Length"))
+	if err != nil {
+		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
+	}
+	request.ContentLength = int64(contentLength)
+
+	body := make([]byte, request.ContentLength)
+	bytesRead, err := io.ReadFull(reader, body)
+
+	if err != nil {
+		return fmt.Errorf("failed to read body: %w", err)
+	}
+
+	if bytesRead != contentLength {
+		return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read, got %d", contentLength, bytesRead)}
+	}
+
+	request.Body = io.NopCloser(bytes.NewBuffer(body))
+	return nil
 }
 
 func processRequestLine(requestLine string, request *http.Request) error {
