@@ -38,7 +38,6 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 
 	// Read and process header lines
 	for {
-		//line, err := tp.ReadLine()
 		line, err := lineReader.ReadCRLine()
 		if err != nil {
 			if e, conv := errors.AsType[HTTPError](err); conv {
@@ -50,7 +49,7 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 		if line == "" {
 			break
 		}
-		err = processHeaderLine(line, &request)
+		err = processHeaderLine(line, &request.Header)
 		if err != nil {
 			if e, conv := errors.AsType[HTTPError](err); conv {
 				return nil, e
@@ -58,10 +57,16 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse header line"}
 		}
 	}
+	if len(request.Header.Values("Host")) > 1 {
+		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Trying to set Host header multiple times")}
+	}
+	if request.Header.Get("Host") == "" {
+		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Host header not present in request")}
+	}
 
 	setConnectionClose(&request)
 
-	if err = processBody(reader, &request); err != nil {
+	if err = processBody(lineReader, &request); err != nil {
 		if e, conv := errors.AsType[HTTPError](err); conv {
 			return nil, e
 		}
@@ -90,7 +95,7 @@ func setConnectionClose(request *http.Request) {
 	}
 }
 
-func processBody(reader *bufio.Reader, request *http.Request) error {
+func processBody(reader *CRReader, request *http.Request) error {
 	if len(request.Header.Values("Content-Length")) > 1 {
 		checkDuplicates := request.Header.Values("Content-Length")
 		slices.Sort(checkDuplicates)
@@ -99,6 +104,10 @@ func processBody(reader *bufio.Reader, request *http.Request) error {
 		if len(checkDuplicates) > 1 {
 			return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
 		}
+	}
+
+	if len(request.Header.Values("Transfer-Encoding")) > 0 {
+		request.TransferEncoding = request.Header.Values("Transfer-Encoding")
 	}
 
 	if request.Header.Get("Content-Length") == "" {
@@ -112,19 +121,92 @@ func processBody(reader *bufio.Reader, request *http.Request) error {
 		request.ContentLength = int64(contentLength)
 	}
 
-	body := make([]byte, request.ContentLength)
-	bytesRead, err := io.ReadFull(reader, body)
+	if slices.Contains(request.TransferEncoding, "chunked") {
+		var body []byte
+		for {
+			// TODO: here can be chunk extensions
+			chunkData, err := reader.ReadCRLine()
+			if err != nil {
+				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read chunk size"}
+			}
 
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return fmt.Errorf("failed to read body: %w", err)
+			if i := strings.IndexRune(chunkData, ';'); i >= 0 {
+				chunkData = chunkData[:i]
+			}
+
+			bytesToRead, err := strconv.ParseInt(chunkData, 16, 64)
+			if err != nil {
+				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "cannot convert chunk size to integer"}
+			}
+
+			if bytesToRead == 0 {
+				// We have hit the end of the chunked body
+				break
+			}
+
+			chunk := make([]byte, bytesToRead)
+			bytesRead, err := io.ReadFull(reader, chunk)
+			if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("failed to read body: %w", err)
+			}
+
+			if bytesRead != int(bytesToRead) {
+				return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read in chunk, got %d", bytesToRead, bytesRead)}
+			}
+			body = append(body, chunk...)
+			// We expect a CRLF after the chunk data
+			line, err := reader.ReadCRLine()
+			if line != "" {
+				return HTTPError{http.StatusBadRequest, "Expected CRLF after chunk data"}
+			}
+			if err != nil {
+				return HTTPError{http.StatusBadRequest, "unexpected read error after chunk data"}
+			}
+		}
+		// TODO: handle trailer section
+		// Read and process trailer lines
+		for {
+			line, err := reader.ReadCRLine()
+			if err != nil {
+				if e, conv := errors.AsType[HTTPError](err); conv {
+					return e
+				}
+				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read trailer line"}
+			}
+			// End of trailer block
+			if line == "" {
+				break
+			}
+			if request.Trailer == nil {
+				request.Trailer = make(http.Header)
+			}
+			err = processHeaderLine(line, &request.Trailer)
+			if err != nil {
+				if e, conv := errors.AsType[HTTPError](err); conv {
+					return e
+				}
+				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse trailer line"}
+			}
+		}
+
+		request.Body = io.NopCloser(bytes.NewBuffer(body))
+	} else {
+		// TODO: this is not entirely accurate: there might still be compression applied
+		body := make([]byte, request.ContentLength)
+		bytesRead, err := io.ReadFull(reader, body)
+
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return fmt.Errorf("failed to read body: %w", err)
+		}
+
+		if bytesRead != int(request.ContentLength) {
+			return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read, got %d", request.ContentLength, bytesRead)}
+		}
+
+		request.Body = io.NopCloser(bytes.NewBuffer(body))
 	}
-
-	if bytesRead != int(request.ContentLength) {
-		return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read, got %d", request.ContentLength, bytesRead)}
-	}
-
-	request.Body = io.NopCloser(bytes.NewBuffer(body))
 	return nil
+
 }
 
 func processRequestLine(requestLine string, request *http.Request) error {
@@ -207,7 +289,7 @@ func processHTTPVersion(requestProto string, request *http.Request) error {
 	return nil
 }
 
-func processHeaderLine(headerLine string, request *http.Request) error {
+func processHeaderLine(headerLine string, section *http.Header) error {
 	fields := strings.SplitN(headerLine, ":", 2)
 	if len(fields) != 2 {
 		return fmt.Errorf("expected 2 strings separated by ':' in header %q, got %d", headerLine, len(fields))
@@ -217,17 +299,6 @@ func processHeaderLine(headerLine string, request *http.Request) error {
 		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("header contains whitespace between header field name and colon: %q", headerLine)}
 	}
 
-	// TODO: Should we validate these?
-	if fields[0] == "Host" && request.Header.Get("Host") != "" {
-		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Trying to set Host header multiple times")}
-	}
-
-	request.Header.Add(fields[0], strings.TrimSpace(fields[1]))
-
-	// TODO: include validation of authority component
-	if len(request.Header.Values("Host")) == 0 {
-		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Host Header not present in request")}
-	}
-
+	section.Add(fields[0], strings.ToLower(strings.TrimSpace(fields[1])))
 	return nil
 }

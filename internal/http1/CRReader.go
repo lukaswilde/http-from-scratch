@@ -10,6 +10,10 @@ type CRReader struct {
 	reader *bufio.Reader
 }
 
+func (r *CRReader) Read(p []byte) (n int, err error) {
+	return r.reader.Read(p)
+}
+
 func NewCRReader(reader *bufio.Reader) *CRReader {
 	return &CRReader{reader: reader}
 }
