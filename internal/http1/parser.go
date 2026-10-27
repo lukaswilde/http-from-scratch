@@ -91,6 +91,16 @@ func setConnectionClose(request *http.Request) {
 }
 
 func processBody(reader *bufio.Reader, request *http.Request) error {
+	if len(request.Header.Values("Content-Length")) > 1 {
+		checkDuplicates := request.Header.Values("Content-Length")
+		slices.Sort(checkDuplicates)
+		checkDuplicates = slices.Compact(checkDuplicates)
+
+		if len(checkDuplicates) > 1 {
+			return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
+		}
+	}
+
 	if request.Header.Get("Content-Length") == "" {
 		request.ContentLength = 0
 		request.Header.Set("Content-Length", "0")
@@ -105,7 +115,7 @@ func processBody(reader *bufio.Reader, request *http.Request) error {
 	body := make([]byte, request.ContentLength)
 	bytesRead, err := io.ReadFull(reader, body)
 
-	if err != nil {
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return fmt.Errorf("failed to read body: %w", err)
 	}
 
