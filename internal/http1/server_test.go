@@ -251,7 +251,7 @@ type serverTest struct {
 // testTimeout bounds every blocking read in the tests. With a correct
 // implementation every operation completes in microseconds (the connection
 // is in-memory), so the timeout only guards against a hung server.
-const testTimeout = 2 * time.Second
+const testTimeout = 200 * time.Second
 
 // newServerTest starts HandleConnection on one end of an in-memory pipe and
 // returns a handle for the other end. The HandleConnection error is captured

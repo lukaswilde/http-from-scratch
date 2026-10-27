@@ -3,10 +3,8 @@ package http1
 import (
 	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"slices"
@@ -14,199 +12,192 @@ import (
 	"strings"
 )
 
+var acceptedMethods = []string{"HEAD", "GET", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE", "QUERY"}
+
 func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
-	request := http.Request{Header: http.Header{}}
-
-	//tp := textproto.NewReader(bufio.NewReader(reader))
 	lineReader := NewCRReader(reader)
+	request := &http.Request{Header: make(http.Header), Trailer: make(http.Header)}
 
-	// Read and process request line
-	//requestLine, err := tp.ReadLine()
-	//requestLine, err := reader.ReadString('\n')
+	// ------ Request Line --------
 	requestLine, err := lineReader.ReadCRLine()
 	if err != nil {
-		log.Printf("Error reading line: %v", err)
 		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read request line"}
 	}
-
-	if err = processRequestLine(requestLine, &request); err != nil {
-		if e, conv := errors.AsType[HTTPError](err); conv {
-			return nil, e
-		}
-		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse request line"}
+	if err = processRequestLine(requestLine, request); err != nil {
+		return nil, ensureHTTPError(err, "failed to parse request line")
 	}
 
-	// Read and process header lines
-	for {
-		line, err := lineReader.ReadCRLine()
-		if err != nil {
-			if e, conv := errors.AsType[HTTPError](err); conv {
-				return nil, e
-			}
-			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read header line"}
-		}
-		// End of header block
-		if line == "" {
-			break
-		}
-		err = processHeaderLine(line, &request.Header)
-		if err != nil {
-			if e, conv := errors.AsType[HTTPError](err); conv {
-				return nil, e
-			}
-			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse header line"}
-		}
+	// ------ Headers --------
+	if err = parseFields(lineReader, request.Header); err != nil {
+		return nil, err
 	}
-	if len(request.Header.Values("Host")) > 1 {
-		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Trying to set Host header multiple times")}
-	}
-	if request.Header.Get("Host") == "" {
-		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Host header not present in request")}
+	if err = validateHeaders(request); err != nil {
+		return nil, err
 	}
 
-	setConnectionClose(&request)
-
-	if err = processBody(lineReader, &request); err != nil {
-		if e, conv := errors.AsType[HTTPError](err); conv {
-			return nil, e
-		}
-		return nil, fmt.Errorf("failed to parse body: %w", err)
+	// ------ Body and Connection state --------
+	request.Close = getConnectionClose(request)
+	if err = processBody(lineReader, request); err != nil {
+		return nil, ensureHTTPError(err, "failed to parse body")
 	}
 
-	log.Println(request)
-	return &request, nil
-
+	return request, nil
 }
 
-func setConnectionClose(request *http.Request) {
-	if request.Header.Get("Connection") == "close" {
-		request.Close = true
-	} else if request.Header.Get("Connection") == "keep-alive" {
-		request.Close = false
-	} else if request.ProtoMajor == 1 {
-		if request.ProtoMinor == 0 {
-			request.Close = true
-		}
-		if request.ProtoMinor == 1 {
-			request.Close = false
-		}
-	} else {
-		request.Close = false
+func validateHeaders(request *http.Request) error {
+	if len(request.Header.Values("Host")) > 1 {
+		return HTTPError{StatusCode: http.StatusBadRequest, Reason: "Trying to set Host header multiple times"}
 	}
+	// No Host header valid in HTTP/1.0
+	if request.Header.Get("Host") == "" && (request.ProtoMajor != 1 || request.ProtoMinor != 0) {
+		return HTTPError{StatusCode: http.StatusBadRequest, Reason: "Host header not present in request"}
+	}
+	request.Host = request.Header.Get("Host")
+	return nil
+}
+
+func parseFields(reader *CRReader, section http.Header) error {
+	for {
+		line, err := reader.ReadCRLine()
+		if err != nil {
+			return ensureHTTPError(err, "failed to read field line")
+		}
+		if line == "" {
+			return nil
+		}
+		err = processFieldLine(line, section)
+		if err != nil {
+			return ensureHTTPError(err, "failed to parse field line")
+		}
+	}
+}
+
+func getConnectionClose(request *http.Request) bool {
+	insensitiveCompare := func(slice []string, value string) bool {
+		return slices.ContainsFunc(slice, func(s string) bool { return strings.EqualFold(s, value) })
+	}
+	if insensitiveCompare(request.Header.Values("Connection"), "close") {
+		return true
+	}
+	if insensitiveCompare(request.Header.Values("Connection"), "keep-alive") {
+		return false
+	}
+	return request.ProtoMajor == 1 && request.ProtoMinor == 0
 }
 
 func processBody(reader *CRReader, request *http.Request) error {
-	if len(request.Header.Values("Content-Length")) > 1 {
-		checkDuplicates := request.Header.Values("Content-Length")
-		slices.Sort(checkDuplicates)
-		checkDuplicates = slices.Compact(checkDuplicates)
-
-		if len(checkDuplicates) > 1 {
-			return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
-		}
+	if te := request.Header.Values("Transfer-Encoding"); len(te) > 0 {
+		request.TransferEncoding = te
 	}
 
-	if len(request.Header.Values("Transfer-Encoding")) > 0 {
-		request.TransferEncoding = request.Header.Values("Transfer-Encoding")
-	}
-
-	if request.Header.Get("Content-Length") == "" {
-		request.ContentLength = 0
-		request.Header.Set("Content-Length", "0")
-	} else {
-		contentLength, err := strconv.Atoi(request.Header.Get("Content-Length"))
+	if isChunked(request.TransferEncoding) {
+		body, err := readChunkedBody(reader, request)
 		if err != nil {
-			return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
+			return err
 		}
-		request.ContentLength = int64(contentLength)
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
 	}
 
-	if slices.Contains(request.TransferEncoding, "chunked") {
-		var body []byte
-		for {
-			// TODO: here can be chunk extensions
-			chunkData, err := reader.ReadCRLine()
-			if err != nil {
-				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read chunk size"}
-			}
-
-			if i := strings.IndexRune(chunkData, ';'); i >= 0 {
-				chunkData = chunkData[:i]
-			}
-
-			bytesToRead, err := strconv.ParseInt(chunkData, 16, 64)
-			if err != nil {
-				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "cannot convert chunk size to integer"}
-			}
-
-			if bytesToRead == 0 {
-				// We have hit the end of the chunked body
-				break
-			}
-
-			chunk := make([]byte, bytesToRead)
-			bytesRead, err := io.ReadFull(reader, chunk)
-			if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-				return fmt.Errorf("failed to read body: %w", err)
-			}
-
-			if bytesRead != int(bytesToRead) {
-				return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read in chunk, got %d", bytesToRead, bytesRead)}
-			}
-			body = append(body, chunk...)
-			// We expect a CRLF after the chunk data
-			line, err := reader.ReadCRLine()
-			if line != "" {
-				return HTTPError{http.StatusBadRequest, "Expected CRLF after chunk data"}
-			}
-			if err != nil {
-				return HTTPError{http.StatusBadRequest, "unexpected read error after chunk data"}
-			}
-		}
-		// TODO: handle trailer section
-		// Read and process trailer lines
-		for {
-			line, err := reader.ReadCRLine()
-			if err != nil {
-				if e, conv := errors.AsType[HTTPError](err); conv {
-					return e
-				}
-				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read trailer line"}
-			}
-			// End of trailer block
-			if line == "" {
-				break
-			}
-			if request.Trailer == nil {
-				request.Trailer = make(http.Header)
-			}
-			err = processHeaderLine(line, &request.Trailer)
-			if err != nil {
-				if e, conv := errors.AsType[HTTPError](err); conv {
-					return e
-				}
-				return HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse trailer line"}
-			}
-		}
-
-		request.Body = io.NopCloser(bytes.NewBuffer(body))
-	} else {
-		// TODO: this is not entirely accurate: there might still be compression applied
-		body := make([]byte, request.ContentLength)
-		bytesRead, err := io.ReadFull(reader, body)
-
-		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return fmt.Errorf("failed to read body: %w", err)
-		}
-
-		if bytesRead != int(request.ContentLength) {
-			return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read, got %d", request.ContentLength, bytesRead)}
-		}
-
-		request.Body = io.NopCloser(bytes.NewBuffer(body))
+	contentLength, err := validateContentLength(request.Header)
+	if err != nil {
+		return err
 	}
+	request.ContentLength = contentLength
+
+	if contentLength == 0 {
+		request.Body = http.NoBody
+		return nil
+	}
+
+	// TODO: this is not entirely accurate: there might still be compression applied
+	body, err := readFixedBody(reader, request)
+	if err != nil {
+		return err
+	}
+
+	request.Body = io.NopCloser(bytes.NewBuffer(body))
 	return nil
+}
 
+func readFixedBody(reader *CRReader, request *http.Request) ([]byte, error) {
+	body := make([]byte, request.ContentLength)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read body"}
+	}
+	return body, nil
+}
+
+func readChunkedBody(reader *CRReader, request *http.Request) ([]byte, error) {
+	var body []byte
+	for {
+		chunkData, err := reader.ReadCRLine()
+		if err != nil {
+			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read chunk size"}
+		}
+
+		// Strip chunk extensions
+		if i := strings.IndexRune(chunkData, ';'); i >= 0 {
+			chunkData = chunkData[:i]
+		}
+
+		chunkSize, err := strconv.ParseInt(chunkData, 16, 64)
+		if err != nil || chunkSize < 0 {
+			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "cannot convert chunk size to integer"}
+		}
+
+		if chunkSize == 0 {
+			break
+		}
+
+		chunk := make([]byte, chunkSize)
+		if bytesRead, err := io.ReadFull(reader, chunk); err != nil {
+			return nil, HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read in chunk, got %d", chunkSize, bytesRead)}
+		}
+		body = append(body, chunk...)
+
+		// We expect a CRLF after the chunk data
+		clrf, err := reader.ReadCRLine()
+		if err != nil {
+			return nil, HTTPError{http.StatusBadRequest, "unexpected read error after chunk data"}
+		}
+		if clrf != "" {
+			return nil, HTTPError{http.StatusBadRequest, "Expected CRLF after chunk data"}
+		}
+	}
+	// Read and process trailer lines
+	if err := parseFields(reader, request.Trailer); err != nil {
+		return nil, err
+	}
+
+	return body, nil
+}
+
+func validateContentLength(header http.Header) (int64, error) {
+	contentLengthValues := header.Values("Content-Length")
+	if len(contentLengthValues) == 0 {
+		return 0, nil
+	}
+	uniqueValues := slices.Compact(slices.Sorted(slices.Values(contentLengthValues)))
+	if len(uniqueValues) > 1 {
+		return 0, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", header.Get("Content-Length"))}
+	}
+
+	contentStr := strings.TrimSpace(uniqueValues[0])
+	length, err := strconv.ParseInt(contentStr, 10, 64)
+	if err != nil || length < 0 {
+		return 0, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("invalid content length: %q", contentStr)}
+	}
+
+	return length, nil
+}
+
+func isChunked(encoding []string) bool {
+	if len(encoding) == 0 {
+		return false
+	}
+	lastHeader := encoding[len(encoding)-1]
+	return strings.EqualFold(strings.TrimSpace(lastHeader), "chunked")
 }
 
 func processRequestLine(requestLine string, request *http.Request) error {
@@ -219,7 +210,6 @@ func processRequestLine(requestLine string, request *http.Request) error {
 	requestURI := fields[1]
 	requestProto := fields[2]
 
-	acceptedMethods := []string{"HEAD", "GET", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE", "QUERY"}
 	if !slices.Contains(acceptedMethods, strings.ToUpper(method)) {
 		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("unknown method %q", method)}
 	}
@@ -289,7 +279,7 @@ func processHTTPVersion(requestProto string, request *http.Request) error {
 	return nil
 }
 
-func processHeaderLine(headerLine string, section *http.Header) error {
+func processFieldLine(headerLine string, section http.Header) error {
 	fields := strings.SplitN(headerLine, ":", 2)
 	if len(fields) != 2 {
 		return fmt.Errorf("expected 2 strings separated by ':' in header %q, got %d", headerLine, len(fields))
@@ -299,6 +289,6 @@ func processHeaderLine(headerLine string, section *http.Header) error {
 		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("header contains whitespace between header field name and colon: %q", headerLine)}
 	}
 
-	section.Add(fields[0], strings.ToLower(strings.TrimSpace(fields[1])))
+	section.Add(fields[0], strings.TrimSpace(fields[1]))
 	return nil
 }
