@@ -56,7 +56,7 @@ func validateHeaders(request *http.Request) error {
 	return nil
 }
 
-func parseFields(reader *CRReader, section http.Header) error {
+func parseFields(reader *CRLFReader, section http.Header) error {
 	for {
 		line, err := reader.ReadCRLine()
 		if err != nil {
@@ -85,7 +85,7 @@ func getConnectionClose(request *http.Request) bool {
 	return request.ProtoMajor == 1 && request.ProtoMinor == 0
 }
 
-func processBody(reader *CRReader, request *http.Request) error {
+func processBody(reader *CRLFReader, request *http.Request) error {
 	if te := request.Header.Values("Transfer-Encoding"); len(te) > 0 {
 		request.TransferEncoding = te
 	}
@@ -120,7 +120,7 @@ func processBody(reader *CRReader, request *http.Request) error {
 	return nil
 }
 
-func readFixedBody(reader *CRReader, request *http.Request) ([]byte, error) {
+func readFixedBody(reader *CRLFReader, request *http.Request) ([]byte, error) {
 	body := make([]byte, request.ContentLength)
 	if _, err := io.ReadFull(reader, body); err != nil {
 		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read body"}
@@ -128,7 +128,7 @@ func readFixedBody(reader *CRReader, request *http.Request) ([]byte, error) {
 	return body, nil
 }
 
-func readChunkedBody(reader *CRReader, request *http.Request) ([]byte, error) {
+func readChunkedBody(reader *CRLFReader, request *http.Request) ([]byte, error) {
 	var body []byte
 	for {
 		chunkData, err := reader.ReadCRLine()

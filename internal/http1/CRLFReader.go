@@ -6,19 +6,19 @@ import (
 	"strings"
 )
 
-type CRReader struct {
+type CRLFReader struct {
 	reader *bufio.Reader
 }
 
-func (r *CRReader) Read(p []byte) (n int, err error) {
+func (r *CRLFReader) Read(p []byte) (n int, err error) {
 	return r.reader.Read(p)
 }
 
-func NewCRReader(reader *bufio.Reader) *CRReader {
-	return &CRReader{reader: reader}
+func NewCRReader(reader *bufio.Reader) *CRLFReader {
+	return &CRLFReader{reader: reader}
 }
 
-func (r *CRReader) ReadCRLine() (string, error) {
+func (r *CRLFReader) ReadCRLine() (string, error) {
 	line, err := r.reader.ReadString('\n')
 	if err != nil {
 		return "", err
