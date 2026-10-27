@@ -3,11 +3,11 @@ package http1
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"slices"
 	"strconv"
@@ -17,23 +17,34 @@ import (
 func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 	request := http.Request{Header: http.Header{}}
 
-	tp := textproto.NewReader(bufio.NewReader(reader))
+	//tp := textproto.NewReader(bufio.NewReader(reader))
+	lineReader := NewCRReader(reader)
 
 	// Read and process request line
-	requestLine, err := tp.ReadLine()
+	//requestLine, err := tp.ReadLine()
+	//requestLine, err := reader.ReadString('\n')
+	requestLine, err := lineReader.ReadCRLine()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read request line: %w", err)
+		log.Printf("Error reading line: %v", err)
+		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read request line"}
 	}
 
 	if err = processRequestLine(requestLine, &request); err != nil {
-		return nil, fmt.Errorf("failed to parse request: %w", err)
+		if e, conv := errors.AsType[HTTPError](err); conv {
+			return nil, e
+		}
+		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse request line"}
 	}
 
 	// Read and process header lines
 	for {
-		line, err := tp.ReadLine()
+		//line, err := tp.ReadLine()
+		line, err := lineReader.ReadCRLine()
 		if err != nil {
-			return nil, fmt.Errorf("failed to read header line: %w", err)
+			if e, conv := errors.AsType[HTTPError](err); conv {
+				return nil, e
+			}
+			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read header line"}
 		}
 		// End of header block
 		if line == "" {
@@ -41,13 +52,19 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 		}
 		err = processHeaderLine(line, &request)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse header: %w", err)
+			if e, conv := errors.AsType[HTTPError](err); conv {
+				return nil, e
+			}
+			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to parse header line"}
 		}
 	}
 
 	setConnectionClose(&request)
 
 	if err = processBody(reader, &request); err != nil {
+		if e, conv := errors.AsType[HTTPError](err); conv {
+			return nil, e
+		}
 		return nil, fmt.Errorf("failed to parse body: %w", err)
 	}
 
@@ -76,14 +93,14 @@ func setConnectionClose(request *http.Request) {
 func processBody(reader *bufio.Reader, request *http.Request) error {
 	if request.Header.Get("Content-Length") == "" {
 		request.ContentLength = 0
-		return nil
+		request.Header.Set("Content-Length", "0")
+	} else {
+		contentLength, err := strconv.Atoi(request.Header.Get("Content-Length"))
+		if err != nil {
+			return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
+		}
+		request.ContentLength = int64(contentLength)
 	}
-
-	contentLength, err := strconv.Atoi(request.Header.Get("Content-Length"))
-	if err != nil {
-		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("could not parse Content-Length: %q", request.Header.Get("Content-Length"))}
-	}
-	request.ContentLength = int64(contentLength)
 
 	body := make([]byte, request.ContentLength)
 	bytesRead, err := io.ReadFull(reader, body)
@@ -92,8 +109,8 @@ func processBody(reader *bufio.Reader, request *http.Request) error {
 		return fmt.Errorf("failed to read body: %w", err)
 	}
 
-	if bytesRead != contentLength {
-		return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read, got %d", contentLength, bytesRead)}
+	if bytesRead != int(request.ContentLength) {
+		return HTTPError{http.StatusBadRequest, fmt.Sprintf("expected %d bytes to read, got %d", request.ContentLength, bytesRead)}
 	}
 
 	request.Body = io.NopCloser(bytes.NewBuffer(body))
