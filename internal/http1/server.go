@@ -2,7 +2,9 @@ package http1
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -33,16 +35,41 @@ func ListenAndServe(addr string, handler http.Handler) error {
 
 func HandleConnection(conn net.Conn, mux http.Handler) error {
 	log.Printf("Handling connection from %s", conn.RemoteAddr())
-	defer conn.Close()
-
-	reader := bufio.NewReader(conn)
-	request, err := ParseRequest(reader)
-	if err != nil {
-		return fmt.Errorf("could not parse request: %w", err)
-	}
 
 	response := NewResponse(conn)
-	mux.ServeHTTP(response, request)
+	reader := bufio.NewReader(conn)
 
-	return nil
+	for {
+		request, err := ParseRequest(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+
+			if e, ok := errors.AsType[HTTPError](err); ok {
+				response.WriteHeader(e.StatusCode)
+				response.header.Set("Connection", "close")
+				err = response.finishRequest()
+				return err
+			}
+
+			return fmt.Errorf("could not parse request: %w", err)
+		}
+
+		if request.Close {
+			response.header.Set("Connection", "close")
+		}
+		mux.ServeHTTP(response, request)
+
+		err = response.finishRequest()
+		if err != nil {
+			return fmt.Errorf("could not finish request: %w", err)
+		}
+
+		if request.Close {
+			return nil
+		}
+
+		// TODO: set connection close in request
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -44,6 +45,8 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 		}
 	}
 
+	setConnectionClose(&request)
+
 	if err = processBody(reader, &request); err != nil {
 		return nil, fmt.Errorf("failed to parse body: %w", err)
 	}
@@ -51,6 +54,23 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 	log.Println(request)
 	return &request, nil
 
+}
+
+func setConnectionClose(request *http.Request) {
+	if request.Header.Get("Connection") == "close" {
+		request.Close = true
+	} else if request.Header.Get("Connection") == "keep-alive" {
+		request.Close = false
+	} else if request.ProtoMajor == 1 {
+		if request.ProtoMinor == 0 {
+			request.Close = true
+		}
+		if request.ProtoMinor == 1 {
+			request.Close = false
+		}
+	} else {
+		request.Close = false
+	}
 }
 
 func processBody(reader *bufio.Reader, request *http.Request) error {
@@ -86,10 +106,14 @@ func processRequestLine(requestLine string, request *http.Request) error {
 		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("expected 3 fields in request line, got %d", len(fields))}
 	}
 
-	// TODO: should we validate these fields?
 	method := fields[0]
 	requestURI := fields[1]
 	requestProto := fields[2]
+
+	acceptedMethods := []string{"HEAD", "GET", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE", "QUERY"}
+	if !slices.Contains(acceptedMethods, strings.ToUpper(method)) {
+		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("unknown method %q", method)}
+	}
 
 	request.Method = method
 
@@ -133,9 +157,6 @@ func processHTTPVersion(requestProto string, request *http.Request) error {
 	if len(versionParts) != 2 {
 		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("malformed HTTP version number")}
 	}
-	if len(versionParts[0]) > 1 || len(versionParts[1]) > 1 {
-		return HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("malformed HTTP version number")}
-	}
 
 	majorVersion, err := strconv.Atoi(versionParts[0])
 	if err != nil {
@@ -149,6 +170,12 @@ func processHTTPVersion(requestProto string, request *http.Request) error {
 	request.Proto = requestProto
 	request.ProtoMajor = majorVersion
 	request.ProtoMinor = minorVersion
+
+	if request.ProtoMajor != 1 {
+		return HTTPError{StatusCode: http.StatusHTTPVersionNotSupported, Reason: fmt.Sprintf("Only accepting HTTP version 1.x, got (%d, %d)", majorVersion, minorVersion)}
+	} else if request.ProtoMinor != 0 && request.ProtoMinor != 1 {
+		return HTTPError{StatusCode: http.StatusHTTPVersionNotSupported, Reason: fmt.Sprintf("Only accepting HTTP version 1.x, got (%d, %d)", majorVersion, minorVersion)}
+	}
 
 	return nil
 }
