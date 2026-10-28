@@ -3,6 +3,7 @@ package http1
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,9 @@ func ParseRequest(reader *bufio.Reader) (*http.Request, error) {
 	// ------ Request Line --------
 	requestLine, err := lineReader.ReadCRLine()
 	if err != nil {
+		if errors.Is(err, io.EOF) && len(requestLine) == 0 {
+			return nil, io.EOF
+		}
 		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: "failed to read request line"}
 	}
 	if err = processRequestLine(requestLine, request); err != nil {

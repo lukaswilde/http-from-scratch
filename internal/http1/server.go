@@ -27,20 +27,25 @@ func ListenAndServe(addr string, handler http.Handler) error {
 			return fmt.Errorf("could not accept request: %w", err)
 		}
 
-		if err = HandleConnection(conn, handler); err != nil {
-			return fmt.Errorf("could not handle connection: %w", err)
-		}
+		go func(c net.Conn) {
+			defer c.Close()
+
+			if err := HandleConnection(conn, handler); err != nil {
+				log.Printf("[%s] connection error: %v", c.RemoteAddr(), err)
+			}
+		}(conn)
 	}
 }
 
 func HandleConnection(conn net.Conn, mux http.Handler) error {
 	log.Printf("Handling connection from %s", conn.RemoteAddr())
 
-	response := NewResponse(conn)
 	reader := bufio.NewReader(conn)
 
 	for {
+		response := NewResponse(conn)
 		request, err := ParseRequest(reader)
+		// Could not read request line: client has closed the connection
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -67,9 +72,8 @@ func HandleConnection(conn net.Conn, mux http.Handler) error {
 		}
 
 		if request.Close {
+			conn.Close()
 			return nil
 		}
-
-		// TODO: set connection close in request
 	}
 }
