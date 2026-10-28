@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 )
 
@@ -52,6 +53,38 @@ func main() {
 			users = append(users, user)
 			w.Header().Set("Location", "/users/"+strconv.Itoa(user.UserID))
 			w.WriteHeader(http.StatusCreated)
+		}
+	})
+	http1.HandleFunc("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			id, err := strconv.Atoi(r.PathValue("id"))
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+
+			idx := slices.IndexFunc(users, func(u User) bool {
+				return u.UserID == id
+			})
+
+			if idx == -1 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			user := users[idx]
+			usersJSON, err := json.Marshal(user)
+			log.Println(usersJSON)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, err = w.Write(usersJSON)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 	if err := http1.ListenAndServe(addr, nil); err != nil {
