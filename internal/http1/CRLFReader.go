@@ -21,7 +21,7 @@ func NewCRReader(reader *bufio.Reader) *CRLFReader {
 func (r *CRLFReader) ReadCRLine() (string, error) {
 	line, err := r.reader.ReadString('\n')
 	if err != nil {
-		return "", err
+		return line, err
 	}
 	if !strings.HasSuffix(line, "\r\n") {
 		return "", HTTPError{StatusCode: http.StatusBadRequest, Reason: "line not properly separated by \r\n"}
