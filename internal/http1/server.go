@@ -7,10 +7,9 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 )
 
-func ListenAndServe(addr string, handler http.Handler) error {
+func ListenAndServe(addr string, handler MyHandler) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -18,7 +17,8 @@ func ListenAndServe(addr string, handler http.Handler) error {
 	defer listener.Close()
 
 	if handler == nil {
-		handler = http.DefaultServeMux
+		handler = MyDefaultMux
+		//handler = http.DefaultServeMux
 	}
 
 	for {
@@ -37,7 +37,7 @@ func ListenAndServe(addr string, handler http.Handler) error {
 	}
 }
 
-func HandleConnection(conn net.Conn, mux http.Handler) error {
+func HandleConnection(conn net.Conn, mux MyHandler) error {
 	log.Printf("Handling connection from %s", conn.RemoteAddr())
 
 	reader := bufio.NewReader(conn)

@@ -23,7 +23,7 @@ func main() {
 	users = append(users, User{1, "Frank"})
 	users = append(users, User{3, "Hank"})
 
-	http.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
+	http1.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			usersJSON, err := json.Marshal(users)
 			log.Println(usersJSON)
