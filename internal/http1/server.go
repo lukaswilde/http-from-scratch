@@ -29,6 +29,7 @@ func ListenAndServe(addr string, handler MyHandler) error {
 
 		go func(c net.Conn) {
 			defer c.Close()
+			defer log.Println("closed connection:", c.RemoteAddr())
 
 			if err := HandleConnection(conn, handler); err != nil {
 				log.Printf("[%s] connection error: %v", c.RemoteAddr(), err)
@@ -45,7 +46,8 @@ func HandleConnection(conn net.Conn, mux MyHandler) error {
 	for {
 		response := NewResponse(conn)
 		request, err := ParseRequest(reader)
-		// Could not read request line: client has closed the connection
+		// Could not read request line: client may have closed the connection
+		// We could also wait a certain amount of time to retry fetching the connection
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
