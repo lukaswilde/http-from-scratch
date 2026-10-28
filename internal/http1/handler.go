@@ -23,11 +23,16 @@ func (m MyMux) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	path := request.URL.Path
 	log.Println("Serving path ", path)
 
-	handler, err := m.routingTree.Find(path)
+	handler, args, err := m.routingTree.Find(path)
 	if err != nil {
 		writer.WriteHeader(http.StatusNotFound)
 		return
 	}
+
+	for k, v := range args {
+		request.SetPathValue(k, v)
+	}
+
 	(*handler)(writer, request)
 }
 

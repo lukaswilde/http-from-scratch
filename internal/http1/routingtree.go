@@ -3,6 +3,7 @@ package http1
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -82,12 +83,13 @@ func (tree *RoutingTree[T]) Insert(key string, handler T) error {
 	return nil
 }
 
-func (tree *RoutingTree[T]) Find(key string) (*T, error) {
+func (tree *RoutingTree[T]) Find(key string) (*T, map[string]string, error) {
 	components := strings.Split(key, "/")
 	if components[0] != "" {
-		return nil, errors.New("URL path does not start with '/'")
+		return nil, nil, errors.New("URL path does not start with '/'")
 	}
 	components = components[1:]
+	args := make(map[string]string)
 
 	currentNode := tree.root
 	lastPrefixHandler := currentNode.prefixRouteHandler
@@ -95,7 +97,7 @@ func (tree *RoutingTree[T]) Find(key string) (*T, error) {
 	for idx, component := range components {
 		key, err := extractKey(component)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if currentNode.prefixRouteHandler != nil {
@@ -107,51 +109,85 @@ func (tree *RoutingTree[T]) Find(key string) (*T, error) {
 			if nextComponent == "" {
 				if child := currentNode.children[key]; child != nil {
 					if child.prefixRouteHandler != nil {
-						return child.prefixRouteHandler, nil
+						return child.prefixRouteHandler, args, nil
 					}
 				}
-				if lastPrefixHandler != nil {
-					return lastPrefixHandler, nil
+
+				if key := findParameterChild(currentNode); key != nil {
+					child := currentNode.children[*key]
+					args[key.match] = component
+					if child.prefixRouteHandler != nil {
+						return child.prefixRouteHandler, args, nil
+					}
 				}
-				return nil, errors.New("could not match path to a registered route")
+
+				if lastPrefixHandler != nil {
+					return lastPrefixHandler, args, nil
+				}
+				return nil, nil, errors.New("could not match path to a registered route")
 			}
 			if child := currentNode.children[key]; child != nil {
 				currentNode = child
+			} else if key := findParameterChild(currentNode); key != nil {
+				currentNode = currentNode.children[*key]
+				args[key.match] = component
 			} else {
 				if lastPrefixHandler != nil {
-					return lastPrefixHandler, nil
+					return lastPrefixHandler, args, nil
 				}
-				return nil, errors.New("could not match path to a registered route")
+				return nil, nil, errors.New("could not match path to a registered route")
 			}
 		} else {
 			if child := currentNode.children[key]; child != nil {
 				if child.exactPathHandler != nil {
-					return child.exactPathHandler, nil
+					return child.exactPathHandler, args, nil
 				}
 				if child.prefixRouteHandler != nil {
-					return child.prefixRouteHandler, nil
+					return child.prefixRouteHandler, args, nil
+				}
+			} else if key := findParameterChild(currentNode); key != nil {
+				args[key.match] = component
+				child := currentNode.children[*key]
+				if child.exactPathHandler != nil {
+					return child.exactPathHandler, args, nil
+				}
+				if child.prefixRouteHandler != nil {
+					return child.prefixRouteHandler, args, nil
 				}
 			}
 			if lastPrefixHandler != nil {
-				return lastPrefixHandler, nil
+				return lastPrefixHandler, args, nil
 			}
-			return nil, errors.New("could not match path to a registered route")
+			return nil, nil, errors.New("could not match path to a registered route")
 		}
 	}
-	return nil, errors.New("could not match path to a registered route")
+	return nil, nil, errors.New("could not match path to a registered route")
 }
 
 func extractKey(component string) (RoutingKey, error) {
-	var key RoutingKey
+	key := RoutingKey{}
 
 	if strings.HasPrefix(component, "{") && strings.HasSuffix(component, "}") {
 		component = component[1 : len(component)-1]
-		if len(component) == 0 {
-			return RoutingKey{}, fmt.Errorf("URL path contains empty placeholder %v", key)
-		}
-		key = RoutingKey{isParameter: true, match: component}
-	} else {
-		key = RoutingKey{isParameter: false, match: component}
+		key.isParameter = true
 	}
+	if _, err := url.Parse(component); err != nil {
+		return key, fmt.Errorf("URL path contains invalid characters %s", component)
+	}
+	if len(component) == 0 {
+		return RoutingKey{}, fmt.Errorf("URL path contains empty path segment %s", component)
+	}
+
+	key.match = component
 	return key, nil
+}
+
+func findParameterChild[T any](currentNode *RoutingNode[T]) *RoutingKey {
+	for key := range currentNode.children {
+		if key.isParameter {
+			return &key
+		}
+	}
+	return nil
+
 }
