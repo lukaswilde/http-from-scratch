@@ -24,6 +24,7 @@ func TestRoutingTree_Find(t *testing.T) {
 	echoAC := echoFunc("a/c")
 	echoADp := echoFunc("a/d/")
 	echoID := echoFunc("a/{id}/")
+	echoIDModel := echoFunc("a/{id}/{model}")
 
 	err := tree.Insert("/a", echoA)
 	if err != nil {
@@ -49,6 +50,10 @@ func TestRoutingTree_Find(t *testing.T) {
 	if err != nil {
 		t.Errorf("Insert() error = %v, key %v", err, "a/{id}/")
 	}
+	err = tree.Insert("/a/{id}/{model}", echoIDModel)
+	if err != nil {
+		t.Errorf("Insert() error = %v, key %v", err, "a/{id}/{model}")
+	}
 
 	tests := []struct {
 		name        string
@@ -60,11 +65,13 @@ func TestRoutingTree_Find(t *testing.T) {
 		{"testExactSingleMatch", "/a", false, echoA, emptyArgs},
 		{"testExactDoubleMach", "/a/b", false, echoAB, emptyArgs},
 		{"testPrefixDoubleMach", "/a/b/", false, echoABp, emptyArgs},
-		{"testPrefixDoesNotCollapse", "/a/c/", true, nil, emptyArgs},
+		{"testPrefixDoesNotCollapse", "/a/c/d/", true, nil, emptyArgs},
 		{"testExactDoesCollapse", "/a/d", false, echoADp, emptyArgs},
 		{"testExtractsArgs", "/a/test", false, echoID, map[string]string{"id": "test"}},
 		{"testExtractsArgsWithTrailing", "/a/test/", false, echoID, map[string]string{"id": "test"}},
-		{"testExtractsArgsInMiddle", "/a/test/path", false, echoID, map[string]string{"id": "test"}},
+		{"testExtractsArgsInMiddle", "/a/test/path/thing", false, echoID, map[string]string{"id": "test"}},
+		{"testExtractTwoArgs", "/a/test/audi", false, echoIDModel, map[string]string{"id": "test", "model": "audi"}},
+		{"testExtractTwoArgs", "/a/test/audi/", false, echoID, map[string]string{"id": "test"}},
 	}
 
 	for _, tt := range tests {

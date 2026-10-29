@@ -3,6 +3,7 @@ package http1
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 )
@@ -93,6 +94,7 @@ func (tree *RoutingTree[T]) Find(key string) (*T, map[string]string, error) {
 
 	currentNode := tree.root
 	lastPrefixHandler := currentNode.prefixRouteHandler
+	lastArgs := make(map[string]string)
 
 	for idx, component := range components {
 		key, err := extractKey(component)
@@ -102,6 +104,7 @@ func (tree *RoutingTree[T]) Find(key string) (*T, map[string]string, error) {
 
 		if currentNode.prefixRouteHandler != nil {
 			lastPrefixHandler = currentNode.prefixRouteHandler
+			lastArgs = maps.Clone(args)
 		}
 
 		if idx+1 < len(components) {
@@ -122,7 +125,7 @@ func (tree *RoutingTree[T]) Find(key string) (*T, map[string]string, error) {
 				}
 
 				if lastPrefixHandler != nil {
-					return lastPrefixHandler, args, nil
+					return lastPrefixHandler, lastArgs, nil
 				}
 				return nil, nil, errors.New("could not match path to a registered route")
 			}
@@ -133,7 +136,7 @@ func (tree *RoutingTree[T]) Find(key string) (*T, map[string]string, error) {
 				args[key.match] = component
 			} else {
 				if lastPrefixHandler != nil {
-					return lastPrefixHandler, args, nil
+					return lastPrefixHandler, lastArgs, nil
 				}
 				return nil, nil, errors.New("could not match path to a registered route")
 			}
@@ -156,7 +159,7 @@ func (tree *RoutingTree[T]) Find(key string) (*T, map[string]string, error) {
 				}
 			}
 			if lastPrefixHandler != nil {
-				return lastPrefixHandler, args, nil
+				return lastPrefixHandler, lastArgs, nil
 			}
 			return nil, nil, errors.New("could not match path to a registered route")
 		}
