@@ -2,15 +2,17 @@ package main
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"httpServer/internal/http1"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
-)
 
-const addr = ":8080"
+	"github.com/joho/godotenv"
+)
 
 type User struct {
 	UserID int
@@ -87,6 +89,17 @@ func main() {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	port := os.Getenv("PORT")
+	host := os.Getenv("HOST")
+	addr := fmt.Sprintf("%s:%s", host, port)
+
+	log.Printf("Starting server at %s", addr)
 	if err := http1.ListenAndServe(addr, nil); err != nil {
 		panic(err)
 	}
