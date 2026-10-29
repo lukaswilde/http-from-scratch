@@ -7,7 +7,7 @@ RUN go mod download
 
 COPY . .
 
-RUN GOOS=linux go build -o /docker-server cmd/userserver/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /docker-server cmd/userserver/main.go
 
 FROM build-stage AS run-test-stage
 RUN go test -v ./...
