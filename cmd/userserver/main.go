@@ -90,9 +90,8 @@ func main() {
 		}
 	})
 
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Error loading .env file: %v. Falling back to system env variables", err)
 	}
 
 	port := os.Getenv("PORT")
