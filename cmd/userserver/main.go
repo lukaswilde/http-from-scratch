@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"httpServer/internal"
 	"httpServer/internal/http1"
@@ -18,6 +19,7 @@ import (
 	"github.com/joho/godotenv"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -126,22 +128,22 @@ func main() {
 		}
 	}))
 	mux.HandleFunc("/users/{id}", internal.TrackMetrics("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		tracer := otel.Tracer("user-service")
 		if r.Method == http.MethodGet {
-			id, err := strconv.Atoi(r.PathValue("id"))
+			ctx, span := tracer.Start(r.Context(), "user-get", trace.WithSpanKind(trace.SpanKindInternal))
+			defer span.End()
+
+			user, err := GetUser(ctx, users, r)
+
+			if e, b := errors.AsType[http1.HTTPError](err); b {
+				w.WriteHeader(e.StatusCode)
+				return
+			}
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
-			}
-
-			idx := slices.IndexFunc(users, func(u User) bool {
-				return u.UserID == id
-			})
-
-			if idx == -1 {
-				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 
-			user := users[idx]
 			usersJSON, err := json.Marshal(user)
 			log.Println(usersJSON)
 			if err != nil {
@@ -176,4 +178,32 @@ func main() {
 	if err := http1.ListenAndServe(addr, wrappedHandler); err != nil {
 		panic(err)
 	}
+}
+
+func GetUser(ctx context.Context, users []User, r *http.Request) (*User, error) {
+	tracer := otel.Tracer("user-service")
+	_, span := tracer.Start(ctx, "get-user")
+	defer span.End()
+	span.SetAttributes(attribute.KeyValue{
+		Key:   "user_id",
+		Value: attribute.StringValue(r.PathValue("id")),
+	})
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid user id: %s", r.PathValue("id"))
+	}
+
+	idx := slices.IndexFunc(users, func(u User) bool {
+		return u.UserID == id
+	})
+	span.SetAttributes(attribute.KeyValue{
+		Key:   "computed_index",
+		Value: attribute.IntValue(idx),
+	})
+
+	if idx == -1 {
+		return nil, http1.HTTPError{StatusCode: http.StatusNotFound, Reason: fmt.Sprintf("user id not found: %s", r.PathValue("id"))}
+	}
+
+	return &users[idx], nil
 }

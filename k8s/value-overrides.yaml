@@ -21,3 +21,7 @@ defaultDatasources:
             datasourceUid: "victoriametrics-logs"
             filterByTraceId: true
             filterBySpanId: true
+
+grafana:
+  adminUser: "admin"
+  adminPassword: "password"
