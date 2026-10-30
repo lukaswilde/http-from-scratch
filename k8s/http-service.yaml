@@ -2,6 +2,8 @@ kind: Service
 apiVersion: v1
 metadata:
   name: http-service
+  labels:
+    app: http-service
 spec:
   selector:
     app: http-server
@@ -9,3 +11,19 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8080
+      name: http-metrics
+---
+
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: users-service-scrape
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: http-service
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 2s

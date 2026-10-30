@@ -1,0 +1,23 @@
+vtsingle:
+  enabled: true
+  spec:
+    retentionPeriod: "7d" # Retention duration (e.g. 7d, 30d)
+    storage:
+      resources:
+        requests:
+          storage: 5Gi
+
+
+defaultDatasources:
+  victoriatraces:
+    datasources:
+      - name: VictoriaTraces
+        uid: VictoriaTraces
+        type: jaeger
+        isDefault: false
+        jsonData:
+          # Optional: configure Trace-to-Logs linking if using VictoriaLogs or Loki
+          tracesToLogs:
+            datasourceUid: "victoriametrics-logs"
+            filterByTraceId: true
+            filterBySpanId: true

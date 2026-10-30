@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -28,7 +27,7 @@ func (r *Response) Header() http.Header {
 }
 
 func (r *Response) Write(data []byte) (n int, err error) {
-	log.Printf("Trying to write data %q", string(data))
+	//log.Printf("Trying to write data %q", string(data))
 
 	if !r.headerWritten {
 		r.WriteHeader(http.StatusOK)

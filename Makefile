@@ -1,8 +1,8 @@
 .PHONY: all image deploy-local clean
 
-SERVER_VERSION ?= 1.0
+TAG ?= 1.0
 CLUSTER_NAME ?= vmstack
-DOCKER_TAG ?= http-server:$(SERVER_VERSION)
+DOCKER_TAG ?= http-server:$(TAG)
 
 all: deploy-local
 
@@ -17,6 +17,7 @@ deploy-local: image
 	kubectl apply -f k8s/http-deployment.yaml \
 				  -f k8s/http-service.yaml \
 				  -f k8s/http-ingress.yaml
+	kubectl rollout restart deployment/http-server-deployment
 
 clean:
 	kind delete cluster --name $(CLUSTER_NAME)
