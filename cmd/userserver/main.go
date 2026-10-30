@@ -81,7 +81,7 @@ func main() {
 		_ = tp.Shutdown(ctx)
 	}()
 
-	mux := http.NewServeMux()
+	mux := http1.NewServeMux()
 
 	mux.HandleFunc("/users", internal.TrackMetrics("/users", func(w http.ResponseWriter, r *http.Request) {
 		tracer := otel.Tracer("user-service")

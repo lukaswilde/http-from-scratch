@@ -5,13 +5,7 @@ import (
 	"net/http"
 )
 
-var MyDefaultMux = &defaultMux
-
-var defaultMux = MyMux{NewRoutingTree[HandlerFunc]()}
-
-type MyHandler interface {
-	ServeHTTP(http.ResponseWriter, *http.Request)
-}
+type MyHandler = http.Handler
 
 type HandlerFunc func(http.ResponseWriter, *http.Request)
 
@@ -19,7 +13,23 @@ type MyMux struct {
 	routingTree *RoutingTree[HandlerFunc]
 }
 
-func (m MyMux) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+func NewServeMux() *MyMux {
+	return &MyMux{NewRoutingTree[HandlerFunc]()}
+}
+
+var MyDefaultMux = NewServeMux()
+
+func (m *MyMux) HandleFunc(pattern string, handler HandlerFunc) {
+	if err := m.routingTree.Insert(pattern, handler); err != nil {
+		panic(err)
+	}
+}
+
+func (m *MyMux) Handle(pattern string, handler MyHandler) {
+	m.HandleFunc(pattern, handler.ServeHTTP)
+}
+
+func (m *MyMux) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	path := request.URL.Path
 	log.Println("Serving path ", path)
 
@@ -37,8 +47,5 @@ func (m MyMux) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func HandleFunc(pattern string, handler HandlerFunc) {
-	err := MyDefaultMux.routingTree.Insert(pattern, handler)
-	if err != nil {
-		panic(err)
-	}
+	MyDefaultMux.HandleFunc(pattern, handler)
 }
