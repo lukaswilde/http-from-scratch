@@ -26,7 +26,7 @@ spec:
             - name: OTEL_SERVICE_NAME
               value: "user-service"
             - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
-              value: "http://vtsingle-my-victoria-metrics-k8s-stack.default.svc:10428/insert/opentelemetry/v1/traces"
+              value: "http://vtsingle-vmstack-victoria-metrics-k8s-stack.default.svc:10428/insert/opentelemetry/v1/traces"
             - name: OTEL_EXPORTER_OTLP_INSECURE
               value: "true"
           ports:
